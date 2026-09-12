@@ -1,11 +1,14 @@
 # Event-Driven Neural Decoding — SER robustness on CRCNS pmd-1
 
 무선 BCI에서 **스파이크 전송 오류(SER, Spike Error Rate)가 늘어날 때 운동 디코딩 성능이 얼마나
-무너지는가**를 공개 영장류 데이터로 독립 재현하고, 원 논문에 없던 **붕괴하지 않는 이유**를 실험으로
-설명한 기록이다.
+무너지는가**를 공개 영장류 데이터로 검증하려는 연구 기록이다. 과거 분석과 보고서를 보존하되,
+2026-09-12부터는 누수 없는 기준선 재현을 먼저 확정한 뒤 강건성 설명을 다시 시험한다.
 
-> **상태 (2026-08-04)**: 결과까지 도달했고 보고서·코드가 있으나, 외부인이 그대로 재현할 수 있는
-> 상태는 아니다. 아래 §5 재현 · §6 한계에 무엇이 검증됐고 무엇이 안 됐는지 그대로 적었다.
+> **상태 (2026-09-12 코드 감사)**: 아래 수치는 과거 파이프라인이 산출한 **legacy claim**이며,
+> 깨끗한 환경에서 독립 재현된 결과가 아니다. 감사 결과 기존 `trial-aware` 구현에는 train/test
+> trial 혼입과 trial 경계를 넘는 lag window 문제가 있었고, burst 오류 구현도 iid 조건과 같은 오류량을
+> 비교하지 않았다. 따라서 현재 수치를 검증된 연구 결과로 인용하지 않는다. 새
+> [`reproduction/r0_ridge.py`](reproduction/r0_ridge.py)가 corrected baseline의 정본이다.
 
 ---
 
@@ -30,9 +33,9 @@ CRCNS **pmd-1** (Perich et al., 2018). 마카크 1개체, M1 67ch + PMd 94ch = *
 **496 reach trial**, 10 ms bin(100 Hz). 스파이크 행렬 59,742 × 161, 총 587,914 스파이크,
 희소율 **93.89%**, 평균 발화율 6.41 Hz.
 
-## 3. 핵심 결과
+## 3. 과거 보고 결과 — 재검증 전
 
-### 3.1 기저 성능 (SER=0, trial-level CV)
+### 3.1 기저 성능 (legacy report; clean trial-level CV 미확인)
 
 | Decoder | r | VAF | Scale Bias(x) |
 |---|---|---|---|
@@ -42,7 +45,7 @@ CRCNS **pmd-1** (Perich et al., 2018). 마카크 1개체, M1 67ch + PMd 94ch = *
 | Transformer | 0.9097 | 0.819 | 0.813 |
 | *원논문 SNN* | *0.9324* | — | — |
 
-### 3.2 SER 강건성 — 재현의 핵심
+### 3.2 SER 강건성 (legacy report; 현재 증거로 사용 금지)
 
 | SER | rate-coded (이 작업) | SNN (원논문) |
 |---|---|---|
@@ -55,19 +58,18 @@ CRCNS **pmd-1** (Perich et al., 2018). 마카크 1개체, M1 67ch + PMd 94ch = *
 
 (retention ratio = r_SER / r_clean)
 
-**rate-coded 디코더 4종은 전부 SER=1e-2에서 retention ≥0.996인 반면, spike-timing 기반 SNN은
-같은 조건에서 0.700으로 무너진다.** 실제 breakdown point는 **SER 0.1~0.2** 부근이며, 이는 SNN이
-이미 붕괴한 지점보다 한 자릿수 뒤다.
+과거 분석은 **rate-coded 디코더 4종이 SER=1e-2에서 retention ≥0.996**이라고 보고했다. 그러나
+clean baseline과 오류 모델이 다시 검증되기 전에는 SNN 대비 우위나 breakdown point를 주장하지 않는다.
 
-### 3.3 왜 안 무너지는가 — population averaging (원 논문에 없는 기여)
+### 3.3 제안했던 설명 — population averaging (미검증 가설)
 
 가설: 뉴런이 많으면 개별 스파이크 오류가 population 평균에서 희석된다.
 
 - N=161, bin당 활성 뉴런 ≈ 9.8개 → SER=0.01에서 bin당 손상 채널 ≈ **0.1개** (희석 ≈ 1/10)
 - **뉴런 subsampling 실험(N=40 vs 161)** 으로 직접 검증 — 뉴런 수를 늘릴수록 retention 곡선이 개선
 
-즉 강건성의 출처는 디코더 아키텍처가 아니라 **표현 방식(rate vs spike-timing)과 population 크기**다.
-설계 함의: 저전력 무선 BCI에서 채널 수를 확보하면 오류 내성 마진을 살 수 있다.
+이 결과 역시 corrected R0 이후 동일 오류량을 보장하는 R1로 다시 실행해야 한다. 현 단계에서는
+**표현 방식과 population 크기가 강건성에 기여할 수 있다**는 후보 가설로만 둔다.
 
 ### 3.4 Transformer attention
 
@@ -75,34 +77,42 @@ trial-level CV + **causal mask**(실시간 BCI는 미래를 못 본다) 조건�
 L1 = 0 ms, L2 = −20 ms, L3 = −10 ms — motor cortex의 movement onset 전 준비 활동과 정합하는
 계층적 temporal processing 패턴.
 
-## 4. 방법에서 스스로 고친 것
+## 4. 코드 감사에서 확인한 방법론 문제
 
-- **trial-level CV로 재설계.** bin 단위 KFold는 trial 경계 내부를 잘라, 운동 궤적의 trial 내 상관이
-  train/test에 걸쳐 새어 들어간다(leakage). trial 단위로 분할해 제거.
-- **affine rescaling을 train split에서만 fit** 해 test에 apply — 시각화 단계의 leakage 차단.
-- **causal mask** — 미래 방향 attention을 상삼각 마스킹.
-- 학습용(`need_weights=False`)과 attention 추출용 클래스를 분리해 매 step의 weight 저장 낭비 제거.
+- 기존 `make_trial_folds`는 train trial ID 자체를 선택하지 않고 연속 bin 범위를 만들기 때문에 일부
+  held-out trial이 train에 포함된다.
+- 전체 trial을 먼저 이어 붙인 뒤 lag window를 만들기 때문에 서로 다른 reach trial 사이를 가로지르는
+  가짜 시간 문맥이 생긴다. lag 이후 bin index와 원래 누적 index도 어긋난다.
+- 기존 burst 함수는 trial 수를 20으로 고정하고, 저 SER에서도 최소 한 구간을 섞으며, iid와 동일한
+  miss/false-alarm 수를 보장하지 않는다. 따라서 iid-versus-burst 비교로 해석할 수 없다.
+- 일부 비선형 경로는 전체 데이터 평균·표준편차를 fold 전에 계산한다. 해당 결과는 누수가 없는
+  재현 전까지 사용하지 않는다.
+
+새 R0는 trial별 window 생성, 명시적 trial-ID 분리, trial별 예측 smoothing, 무 rescaling을 강제한다.
+Transformer·MLP·LSTM·Kalman·SER는 R0가 닫힐 때까지 실행 범위에서 제외한다.
 
 ## 5. 재현
 
-> ⚠️ **아직 한 번도 "깨끗한 환경에서 처음부터" 재현해 본 적이 없다.** 아래는 코드에서 읽어낸
-> 실행 조건이며, 이 저장소만으로 재현이 완결되지 않는다.
+> ⚠️ **실데이터 full run은 아직 실행되지 않았다.** 코드와 합성 데이터 검증은 저장소에서 가능하지만,
+> `MM_S1_processed.mat`는 별도로 준비해야 한다. R0의 성공 조건은 `0.8701`을 다시 만드는 것이 아니라
+> 누수 없는 절차가 끝까지 실행되고 그 차이를 정직하게 기록하는 것이다.
 
-- **실행 환경**: Google Colab (스크립트가 `google.colab.drive`를 직접 import). CUDA 사용.
+- **실행 환경**: Google Colab 또는 로컬 Python. R0 Ridge는 CPU만 사용한다.
 - **데이터**: CRCNS pmd-1의 `MM_S1_processed.mat`. CRCNS는 계정 신청이 필요하며
   이 저장소에 데이터는 포함되지 않는다. 스크립트는 Google Drive 경로
   `/content/drive/MyDrive/data_and_scripts/source_data/processed/MM_S1_processed.mat`를 가정한다.
-- **의존성**: `scipy`, `numpy`, `scikit-learn`, `matplotlib`, `torch`.
-  스크립트가 `requirements.txt`를 설치하는데, **그 파일은 이 저장소가 아니라 별도 저장소에 있다**(아래).
-- **코드 원본 저장소**: `github.com/youjhun05/A-Software-Validation-Using-Macaque-Motor-Cortex-Data-pmd-1-`
-  — 스크립트가 런타임에 clone한다. ⚠️ **계정이 다르다**(`youjhun05` ≠ `youjhun`).
+- **R0 의존성**: [`reproduction/requirements.txt`](reproduction/requirements.txt)에 최소 패키지를 명시했다.
+- **태블릿 진입점**: [`notebooks/R0_ridge_colab.ipynb`](notebooks/R0_ridge_colab.ipynb)을 위에서 아래로
+  실행한다. smoke/full 결과는 휘발성 `/content`가 아니라 Google Drive에 저장한다.
+- **레거시 코드 원본**: `github.com/youjhun05/A-Software-Validation-Using-Macaque-Motor-Cortex-Data-pmd-1-`.
+  연구 근거는 이 저장소의 corrected R0 결과만 사용한다.
 
-**재현을 완결하려면 남은 것**
+**R0를 완결하려면 남은 것**
 
-1. Colab 의존(`drive.mount`, `!pip`, `!git clone`)을 분리해 로컬에서도 도는 진입점 만들기
-2. `requirements.txt`를 이 저장소로 가져와 버전 고정
-3. 데이터 획득 절차 문서화 (CRCNS 계정 → 파일 → 배치 경로)
-4. 결과 표와 그림을 **한 번의 명령으로 재생성**해 위 §3 숫자와 대조
+1. 태블릿에서 데이터 접근 셀을 실행해 `R0_GATE=DATA_FOUND` 확인
+2. 25-trial smoke run으로 파일 구조와 실행 경로 확인
+3. 전체 5-fold 실행 후 `r0_summary.json`과 `r0_folds.csv`를 Drive에 보존
+4. corrected 결과와 legacy `r=0.8701`의 차이를 PI용 보고서에 원인 미정 상태로 기록
 
 ## 6. 한계 (정직하게)
 
